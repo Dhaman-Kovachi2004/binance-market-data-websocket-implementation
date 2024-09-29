@@ -12,7 +12,6 @@ const BinanceMarketData = () => {
 
   // In-memory object to cache candlestick data for each symbol
   const dataCache = useRef({});
-  const pendingData = useRef([]); // To temporarily hold incoming data
 
   // Load data from localStorage when component is mounted
   useEffect(() => {
@@ -47,11 +46,12 @@ const BinanceMarketData = () => {
 
     socketRef.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      console.log(`Received WebSocket data for ${symbol}:`, message); // Debug WebSocket messages
       const candlestick = message.k;
 
       if (candlestick.x) {
         const newCandlestick = {
-          time: candlestick.t / 1000,
+          time: candlestick.t / 1000, // Time should be in seconds for the chart
           open: parseFloat(candlestick.o),
           high: parseFloat(candlestick.h),
           low: parseFloat(candlestick.l),
@@ -62,16 +62,25 @@ const BinanceMarketData = () => {
         if (!dataCache.current[symbol]) {
           dataCache.current[symbol] = [];
         }
-
+        
+        // Check if the time already exists to avoid duplicates
         const existingIndex = dataCache.current[symbol].findIndex(item => item.time === newCandlestick.time);
         if (existingIndex === -1) {
           dataCache.current[symbol].push(newCandlestick);
+          
+          // Sort data to ensure ascending order by time
           dataCache.current[symbol].sort((a, b) => a.time - b.time);
-          storeDataToLocalStorage();
 
-          // Push new data to pendingData array for batch update
-          pendingData.current.push(newCandlestick);
+          // Persist cache to localStorage
+          storeDataToLocalStorage();
         }
+
+        // Log the data before setting it
+        console.log('Setting chart data:', dataCache.current[symbol]);
+
+        // Update chart with new data, ensuring it's sorted
+        const sortedData = [...dataCache.current[symbol]].sort((a, b) => a.time - b.time);
+        candlestickSeriesRef.current.setData(sortedData);
       }
     };
 
@@ -87,13 +96,14 @@ const BinanceMarketData = () => {
   };
 
   useEffect(() => {
+    // Initialize chart on first render
     if (chartContainerRef.current && !chartRef.current) {
       chartRef.current = createChart(chartContainerRef.current, {
         width: chartContainerRef.current.clientWidth,
         height: chartContainerRef.current.clientHeight,
         layout: {
-          backgroundColor: '#000000', // Set chart background color to black
-          textColor: '#ffffff', // Change text color to white for visibility
+          backgroundColor: '#ffffff',
+          textColor: '#000',
         },
         grid: {
           vertLines: {
@@ -111,37 +121,39 @@ const BinanceMarketData = () => {
       candlestickSeriesRef.current = chartRef.current.addCandlestickSeries();
     }
 
+    // Reset the chart and load cached data when the symbol changes
     resetChart();
 
+    // Check if we have cached data for the current symbol
     if (dataCache.current[symbol]) {
+      console.log(`Loading cached data for ${symbol}`);
+      
+      // Log the cached data before setting it
+      console.log('Cached data:', dataCache.current[symbol]);
+
+      // Sort cached data before setting it
       const sortedData = [...dataCache.current[symbol]].sort((a, b) => a.time - b.time);
+      
+      // Check for duplicates before setting data
       const uniqueSortedData = sortedData.filter((item, index, self) =>
         index === self.findIndex((t) => (t.time === item.time))
       );
+
+      console.log('Unique sorted data:', uniqueSortedData);
       candlestickSeriesRef.current.setData(uniqueSortedData);
     }
 
+    // Start WebSocket connection
     connectWebSocket();
 
+    // Cleanup WebSocket on unmount or symbol/interval change
     return () => {
       if (socketRef.current && isConnected.current) {
         socketRef.current.close();
         console.log(`WebSocket connection closing for ${symbol}`);
       }
     };
-  }, [symbol, interval]);
-
-  // Effect to periodically update the chart with pending data
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      if (pendingData.current.length > 0) {
-        candlestickSeriesRef.current.setData([...dataCache.current[symbol], ...pendingData.current]);
-        pendingData.current = []; // Clear pending data after update
-      }
-    }, 1000); // Update every second
-
-    return () => clearInterval(intervalId);
-  }, [symbol]);
+  }, [symbol, interval]); // Reconnect WebSocket when symbol or interval changes
 
   useEffect(() => {
     const handleResize = () => {
@@ -161,16 +173,16 @@ const BinanceMarketData = () => {
   }, []);
 
   return (
-    <div className="flex flex-col items-center p-4 bg-black min-h-screen"> {/* Set background to black */}
-      <h1 className="text-2xl font-bold mb-4 text-white text-center">Binance Market Data</h1> {/* Set text color to white */}
-      <div className="mb-4 flex flex-col sm:flex-row justify-center">
-        <select onChange={(e) => setSymbol(e.target.value)} className="mr-4 p-2 border rounded bg-gray-800 text-white"> {/* Dark background and light text */}
+    <div className="flex flex-col items-center p-4">
+      <h1 className="text-2xl font-bold mb-4">Binance Market Data</h1> {/* Heading added here */}
+      <div className="mb-4">
+        <select onChange={(e) => setSymbol(e.target.value)} className="mr-4 p-2 border rounded">
           <option value="ethusdt">ETH/USDT</option>
           <option value="bnbusdt">BNB/USDT</option>
           <option value="dotusdt">DOT/USDT</option>
         </select>
 
-        <select onChange={(e) => setInterval(e.target.value)} className="p-2 border rounded bg-gray-800 text-white"> {/* Dark background and light text */}
+        <select onChange={(e) => setInterval(e.target.value)} className="p-2 border rounded">
           <option value="1m">1 Minute</option>
           <option value="3m">3 Minute</option>
           <option value="5m">5 Minute</option>
@@ -179,8 +191,8 @@ const BinanceMarketData = () => {
 
       <div
         ref={chartContainerRef}
-        className="w-full max-w-screen-lg" // Set max width for larger screens
         style={{
+          width: '80vw',  // 80% of the viewport width
           height: '80vh', // 80% of the viewport height
           border: '1px solid #ccc',
         }}
